@@ -1,4 +1,4 @@
-// JavDB 组件 for CapyPlayer v1.0.3
+// JavDB 组件 for CapyPlayer v1.0.4
 // 双模式：
 //  1) API 模式（默认）：走中转服务 http://152.53.53.48:8456
 //     —— 服务端用云浏览器过 Cloudflare，无需任何配置，直接可用
@@ -11,7 +11,7 @@ var WidgetMetadata = {
   title: "JavDB",
   description: "JavDB 成人影片数据库：热门、分类与搜索，可查看影片详情信息（番号、发行日期、评分、演员、标签、磁力）。",
   author: "Hermes",
-  version: "1.0.3",
+  version: "1.0.4",
   site: "http://152.53.53.48:8456",
   icon: "https://c0.jdbstatic.com/images/logo_120x120.png",
   globalParams: [
@@ -356,6 +356,37 @@ async function loadDetail(link) {
     return parseDetail(html);
   } catch (err) {
     console.error("javdb detail failed", link, err.message);
+    throw err;
+  }
+}
+
+// ---- 资源（磁力链接列表，填充详情页「资源」区块） ----
+// 组件协议中的 loadResources：返回资源项数组，每项至少含 videoUrl
+async function loadResources(link) {
+  if (!link) throw new Error("missing link");
+  try {
+    var codeM = String(link).match(/\/v\/([A-Za-z0-9]+)/);
+    var code = codeM ? codeM[1] : String(link).replace(/^\/v\//, "");
+    var data = await requestRaw(_site + "/detail", { code: code });
+    var j = tryParseJson(data);
+    var magnets = (j && Array.isArray(j.magnets)) ? j.magnets : [];
+    if (j && j.error) throw new Error("API: " + j.error);
+    if (!magnets.length) return [];
+    var items = [];
+    for (var i = 0; i < magnets.length; i++) {
+      var m = magnets[i] || {};
+      var name = m.name || ("资源 " + (i + 1));
+      var size = m.size ? " (" + m.size + ")" : "";
+      items.push({
+        id: "magnet_" + i,
+        title: name + size,
+        videoUrl: m.magnet || "",
+        description: m.size || ""
+      });
+    }
+    return items;
+  } catch (err) {
+    console.error("javdb resources failed", link, err.message);
     throw err;
   }
 }
