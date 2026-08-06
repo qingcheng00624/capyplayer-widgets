@@ -1,23 +1,23 @@
-// JavDB 组件 for CapyPlayer
-// 数据源: https://javdb.com（站点地址可在组件参数中更换为可用镜像）
+// JavDB 组件 for CapyPlayer v1.0.2
+// 双模式：
+//  1) API 模式（默认）：走中转服务 http://152.53.53.48:8456
+//     —— 服务端用云浏览器过 Cloudflare，无需任何配置，直接可用
+//  2) 直连模式（备用）：站点地址填 https://javdb.com 等镜像域名，
+//     被 CF 拦截时需在手机浏览器过人机验证并填「站点 Cookie」
 // 模块: 热门 / 有码 / 无码 / 欧美 / FC2 / 动漫 / 搜索
 // 列表 -> 详情信息（不含在线播放地址）
-//
-// 被 Cloudflare 拦截(403)时：在手机浏览器（推荐 Kiwi Browser）打开站点过
-// 人机验证，复制 Cookie 填入「站点 Cookie」参数，并把「请求 UA」填成与
-// 浏览器一致，即可正常访问（cookie 过期后需重新过验证）。
 var WidgetMetadata = {
   id: "javdb",
   title: "JavDB",
   description: "JavDB 成人影片数据库：热门、分类与搜索，可查看影片详情信息（番号、发行日期、评分、演员、标签、磁力）。",
   author: "Hermes",
-  version: "1.0.1",
-  site: "https://javdb.com",
+  version: "1.0.2",
+  site: "http://152.53.53.48:8456",
   icon: "https://c0.jdbstatic.com/images/logo_120x120.png",
   globalParams: [
-    { name: "site", label: "站点地址", type: "string", defaultValue: "https://javdb.com", description: "主站被拦截时可更换为可用镜像域名" },
-    { name: "cookie", label: "站点 Cookie", type: "string", defaultValue: "", description: "手机浏览器过 Cloudflare 人机验证后复制的 Cookie（可选，被拦截时填写）" },
-    { name: "userAgent", label: "请求 UA", type: "string", defaultValue: "", description: "与过验证所用浏览器一致的 User-Agent（配合 Cookie 使用，可留空）" }
+    { name: "site", label: "数据源地址", type: "string", defaultValue: "http://152.53.53.48:8456", description: "默认中转服务（免配置）；也可填 javdb 镜像域名走直连模式" },
+    { name: "cookie", label: "站点 Cookie", type: "string", defaultValue: "", description: "仅直连模式被拦截时使用：手机浏览器过验证后复制的 Cookie" },
+    { name: "userAgent", label: "请求 UA", type: "string", defaultValue: "", description: "仅直连模式使用：与过验证浏览器一致的 UA" }
   ],
   modules: [
     { id: "hot", title: "热门", type: "media_list", functionName: "getHot", cacheDuration: 600, params: [{ name: "page", label: "页码", type: "page" }] },
@@ -35,13 +35,12 @@ var WidgetMetadata = {
 
 var DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-// 当前站点 / cookie / UA（globalParams 由数据源函数写入，loadDetail 读取）
-var _site = "https://javdb.com";
+var _site = "http://152.53.53.48:8456";
 var _cookie = "";
 var _ua = DEFAULT_UA;
 
 function siteBase(params) {
-  var s = (params && params.site) ? String(params.site) : "https://javdb.com";
+  var s = (params && params.site) ? String(params.site) : "http://152.53.53.48:8456";
   return s.replace(/\/+$/, "");
 }
 
@@ -54,37 +53,47 @@ function cleanText(s) {
 }
 
 // ---- 请求层 ----
-async function fetchHtml(url, query) {
-  // 优先取持久化的 cookie/UA（loadDetail 不经过模块参数，从 storage 读取）
-  var cookie = Widget.storage.get("javdb_cookie", "");
-  var ua = Widget.storage.get("javdb_ua", "");
-  if (!cookie) cookie = _cookie;
-  if (!ua) ua = _ua;
+async function requestRaw(url, query, timeoutMs) {
   var headers = {
-    "User-Agent": ua || DEFAULT_UA,
+    "User-Agent": _ua,
     "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8"
   };
-  if (cookie) headers["Cookie"] = cookie;
+  if (_cookie) headers["Cookie"] = _cookie;
   var resp = await Widget.http.get(url, {
     params: query || {},
     headers: headers,
-    timeout: 30000
+    timeout: timeoutMs || 45000
   });
   if (!resp.ok) {
-    if (resp.status === 403) {
-      throw new Error("HTTP 403 被 Cloudflare 拦截：请在组件参数中填写「站点 Cookie」（手机浏览器过人机验证后复制）");
-    }
     throw new Error("HTTP " + resp.status + " - " + url);
   }
-  var html = typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data || "");
+  return resp.data;
+}
+
+// 尝试解析 JSON；非 JSON 返回 null
+function tryParseJson(data) {
+  if (data && typeof data === "object") return data;
+  if (typeof data !== "string") return null;
+  var t = data.trim();
+  if (t.indexOf("{") !== 0 && t.indexOf("[") !== 0) return null;
+  try {
+    return JSON.parse(t);
+  } catch (e) {
+    return null;
+  }
+}
+
+// 直连模式 HTML 抓取（带 CF 检测）
+async function fetchHtml(url, query) {
+  var data = await requestRaw(url, query, 30000);
+  var html = typeof data === "string" ? data : JSON.stringify(data || "");
   if (html.indexOf("Just a moment") !== -1 || html.indexOf("challenge-platform") !== -1 || html.indexOf("cf-chl-") !== -1) {
-    throw new Error("站点被 Cloudflare 拦截：请在组件参数中填写「站点 Cookie」（手机浏览器过人机验证后复制）");
+    throw new Error("站点被 Cloudflare 拦截：请改用默认中转地址，或在直连模式填「站点 Cookie」");
   }
   return html;
 }
 
-// ---- 解析层 ----
-// 列表卡片: <a class="box" href=".../v/CODE" title="标题"> 内含 .cover img / .video-title / .score .value / .meta
+// ---- HTML 解析层（直连模式） ----
 function parseList(html) {
   var docId = Widget.dom.parse(html);
   var cards = Widget.dom.select(docId, "a.box");
@@ -101,7 +110,6 @@ function parseList(html) {
     var imgM = inner.match(/<img[^>]*src="([^"]+)"/);
     var poster = imgM ? imgM[1] : "";
 
-    // 完整标题（番号+标题）优先取 .video-title 的文本
     var vtM = inner.match(/<div class="video-title">([\s\S]*?)<\/div>/);
     var title = vtM ? stripTags(vtM[1]) : "";
     if (!title) title = attrs.title ? String(attrs.title).trim() : "";
@@ -130,7 +138,6 @@ function parseList(html) {
   return items;
 }
 
-// 详情信息块: <nav class="panel movie-panel-info"> 内 .panel-block，文本形如 "Released Date: 2018-02-01"
 function parseDetail(html) {
   var docId = Widget.dom.parse(html);
 
@@ -178,7 +185,6 @@ function parseDetail(html) {
     }
   }
 
-  // 磁力链接: #magnets-content .item，内部 a[href^="magnet:"]
   var magnets = [];
   var items = Widget.dom.select(docId, "#magnets-content .item");
   for (var k = 0; k < items.length; k++) {
@@ -230,6 +236,32 @@ async function listModule(path, params, extra) {
     _ua = (params && params.userAgent) ? String(params.userAgent).trim() : DEFAULT_UA;
     if (_cookie) Widget.storage.set("javdb_cookie", _cookie);
     if (_ua !== DEFAULT_UA) Widget.storage.set("javdb_ua", _ua);
+
+    // API 模式：{site}/list?path=...&page=...
+    var apiPath = path;
+    if (extra && extra.q) apiPath += "?q=" + encodeURIComponent(String(extra.q));
+    var data = await requestRaw(_site + "/list", { path: apiPath, page: (params && params.page) || 1 });
+    var j = tryParseJson(data);
+    if (j && Array.isArray(j.items)) {
+      var out = [];
+      for (var i = 0; i < j.items.length; i++) {
+        var it = j.items[i] || {};
+        var id = String(it.id || ("item_" + i));
+        out.push({
+          id: id,
+          title: it.title || id,
+          posterUrl: it.posterUrl || "",
+          rating: typeof it.rating === "number" ? it.rating : null,
+          year: it.year ? String(it.year) : null,
+          mediaType: "movie",
+          link: "/v/" + id
+        });
+      }
+      return out;
+    }
+    if (j && j.error) throw new Error("API: " + j.error);
+
+    // 降级：直连模式抓 HTML
     var qp = { page: (params && params.page) || 1 };
     if (extra) {
       for (var k in extra) qp[k] = extra[k];
@@ -276,8 +308,16 @@ async function searchJavdb(params) {
 async function loadDetail(link) {
   if (!link) throw new Error("missing link");
   try {
-    var url = link.indexOf("http") === 0 ? link : _site + link;
-    var html = await fetchHtml(url);
+    var codeM = String(link).match(/\/v\/([A-Za-z0-9]+)/);
+    var code = codeM ? codeM[1] : String(link).replace(/^\/v\//, "");
+    var data = await requestRaw(_site + "/detail", { code: code });
+    var j = tryParseJson(data);
+    if (j) {
+      if (j.error) throw new Error("API: " + j.error);
+      if (j.title) return j;
+    }
+    // 降级：直连模式
+    var html = typeof data === "string" ? data : JSON.stringify(data || "");
     return parseDetail(html);
   } catch (err) {
     console.error("javdb detail failed", link, err.message);
