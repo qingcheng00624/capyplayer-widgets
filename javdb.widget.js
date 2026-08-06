@@ -2,16 +2,22 @@
 // 数据源: https://javdb.com（站点地址可在组件参数中更换为可用镜像）
 // 模块: 热门 / 有码 / 无码 / 欧美 / FC2 / 动漫 / 搜索
 // 列表 -> 详情信息（不含在线播放地址）
+//
+// 被 Cloudflare 拦截(403)时：在手机浏览器（推荐 Kiwi Browser）打开站点过
+// 人机验证，复制 Cookie 填入「站点 Cookie」参数，并把「请求 UA」填成与
+// 浏览器一致，即可正常访问（cookie 过期后需重新过验证）。
 var WidgetMetadata = {
   id: "javdb",
   title: "JavDB",
   description: "JavDB 成人影片数据库：热门、分类与搜索，可查看影片详情信息（番号、发行日期、评分、演员、标签、磁力）。",
   author: "Hermes",
-  version: "1.0.0",
+  version: "1.0.1",
   site: "https://javdb.com",
   icon: "https://c0.jdbstatic.com/images/logo_120x120.png",
   globalParams: [
-    { name: "site", label: "站点地址", type: "string", defaultValue: "https://javdb.com", description: "主站被拦截时可更换为可用镜像域名" }
+    { name: "site", label: "站点地址", type: "string", defaultValue: "https://javdb.com", description: "主站被拦截时可更换为可用镜像域名" },
+    { name: "cookie", label: "站点 Cookie", type: "string", defaultValue: "", description: "手机浏览器过 Cloudflare 人机验证后复制的 Cookie（可选，被拦截时填写）" },
+    { name: "userAgent", label: "请求 UA", type: "string", defaultValue: "", description: "与过验证所用浏览器一致的 User-Agent（配合 Cookie 使用，可留空）" }
   ],
   modules: [
     { id: "hot", title: "热门", type: "media_list", functionName: "getHot", cacheDuration: 600, params: [{ name: "page", label: "页码", type: "page" }] },
@@ -27,8 +33,12 @@ var WidgetMetadata = {
   ]
 };
 
-// 当前站点（globalParams.site 由数据源函数写入，loadDetail 读取）
+var DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+// 当前站点 / cookie / UA（globalParams 由数据源函数写入，loadDetail 读取）
 var _site = "https://javdb.com";
+var _cookie = "";
+var _ua = DEFAULT_UA;
 
 function siteBase(params) {
   var s = (params && params.site) ? String(params.site) : "https://javdb.com";
@@ -45,20 +55,30 @@ function cleanText(s) {
 
 // ---- 请求层 ----
 async function fetchHtml(url, query) {
+  // 优先取持久化的 cookie/UA（loadDetail 不经过模块参数，从 storage 读取）
+  var cookie = Widget.storage.get("javdb_cookie", "");
+  var ua = Widget.storage.get("javdb_ua", "");
+  if (!cookie) cookie = _cookie;
+  if (!ua) ua = _ua;
+  var headers = {
+    "User-Agent": ua || DEFAULT_UA,
+    "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8"
+  };
+  if (cookie) headers["Cookie"] = cookie;
   var resp = await Widget.http.get(url, {
     params: query || {},
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-      "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8"
-    },
+    headers: headers,
     timeout: 30000
   });
   if (!resp.ok) {
+    if (resp.status === 403) {
+      throw new Error("HTTP 403 被 Cloudflare 拦截：请在组件参数中填写「站点 Cookie」（手机浏览器过人机验证后复制）");
+    }
     throw new Error("HTTP " + resp.status + " - " + url);
   }
   var html = typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data || "");
   if (html.indexOf("Just a moment") !== -1 || html.indexOf("challenge-platform") !== -1 || html.indexOf("cf-chl-") !== -1) {
-    throw new Error("站点被 Cloudflare 拦截，请在组件参数中更换站点地址（镜像域名）");
+    throw new Error("站点被 Cloudflare 拦截：请在组件参数中填写「站点 Cookie」（手机浏览器过人机验证后复制）");
   }
   return html;
 }
@@ -206,6 +226,10 @@ function parseDetail(html) {
 async function listModule(path, params, extra) {
   try {
     _site = siteBase(params);
+    _cookie = (params && params.cookie) ? String(params.cookie).trim() : "";
+    _ua = (params && params.userAgent) ? String(params.userAgent).trim() : DEFAULT_UA;
+    if (_cookie) Widget.storage.set("javdb_cookie", _cookie);
+    if (_ua !== DEFAULT_UA) Widget.storage.set("javdb_ua", _ua);
     var qp = { page: (params && params.page) || 1 };
     if (extra) {
       for (var k in extra) qp[k] = extra[k];
