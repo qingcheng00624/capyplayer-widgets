@@ -1,4 +1,4 @@
-// JavDB 组件 for CapyPlayer v1.0.4
+// JavDB 组件 for CapyPlayer v1.0.5
 // 双模式：
 //  1) API 模式（默认）：走中转服务 http://152.53.53.48:8456
 //     —— 服务端用云浏览器过 Cloudflare，无需任何配置，直接可用
@@ -11,9 +11,10 @@ var WidgetMetadata = {
   title: "JavDB",
   description: "JavDB 成人影片数据库：热门、分类与搜索，可查看影片详情信息（番号、发行日期、评分、演员、标签、磁力）。",
   author: "Hermes",
-  version: "1.0.4",
+  version: "1.0.5",
   site: "http://152.53.53.48:8456",
   icon: "https://c0.jdbstatic.com/images/logo_120x120.png",
+  loadResource: true,
   globalParams: [
     { name: "site", label: "数据源地址", type: "string", defaultValue: "http://152.53.53.48:8456", description: "默认中转服务（免配置）；也可填 javdb 镜像域名走直连模式" },
     { name: "cookie", label: "站点 Cookie", type: "string", defaultValue: "", description: "仅直连模式被拦截时使用：手机浏览器过验证后复制的 Cookie" },
@@ -349,7 +350,18 @@ async function loadDetail(link) {
     var j = tryParseJson(data);
     if (j) {
       if (j.error) throw new Error("API: " + j.error);
-      if (j.title) return j;
+      if (j.title) {
+        // 磁力作为播放线路（playSources）一并返回
+        var sources = [];
+        var mags = (j && Array.isArray(j.magnets)) ? j.magnets : [];
+        for (var s = 0; s < mags.length; s++) {
+          var mm = mags[s] || {};
+          var label = (mm.name || ("磁力 " + (s + 1))) + (mm.size ? " (" + mm.size + ")" : "");
+          sources.push({ title: label, videoUrl: mm.magnet || "" });
+        }
+        if (sources.length) j.playSources = sources;
+        return j;
+      }
     }
     // 降级：直连模式
     var html = typeof data === "string" ? data : JSON.stringify(data || "");
@@ -377,10 +389,13 @@ async function loadResources(link) {
       var m = magnets[i] || {};
       var name = m.name || ("资源 " + (i + 1));
       var size = m.size ? " (" + m.size + ")" : "";
+      var label = name + size;
       items.push({
         id: "magnet_" + i,
-        title: name + size,
+        title: label,
+        name: label,
         videoUrl: m.magnet || "",
+        url: m.magnet || "",
         description: m.size || ""
       });
     }
