@@ -1,4 +1,4 @@
-// JavDB 组件 for CapyPlayer v1.0.2
+// JavDB 组件 for CapyPlayer v1.0.3
 // 双模式：
 //  1) API 模式（默认）：走中转服务 http://152.53.53.48:8456
 //     —— 服务端用云浏览器过 Cloudflare，无需任何配置，直接可用
@@ -11,7 +11,7 @@ var WidgetMetadata = {
   title: "JavDB",
   description: "JavDB 成人影片数据库：热门、分类与搜索，可查看影片详情信息（番号、发行日期、评分、演员、标签、磁力）。",
   author: "Hermes",
-  version: "1.0.2",
+  version: "1.0.3",
   site: "http://152.53.53.48:8456",
   icon: "https://c0.jdbstatic.com/images/logo_120x120.png",
   globalParams: [
@@ -20,6 +20,7 @@ var WidgetMetadata = {
     { name: "userAgent", label: "请求 UA", type: "string", defaultValue: "", description: "仅直连模式使用：与过验证浏览器一致的 UA" }
   ],
   modules: [
+    { id: "categories", title: "分类", type: "category", functionName: "getCategories", cacheDuration: 3600, description: "分类卡片：热门 / 有码 / 欧美" },
     { id: "hot", title: "热门", type: "media_list", functionName: "getHot", cacheDuration: 600, params: [{ name: "page", label: "页码", type: "page" }] },
     { id: "censored", title: "有码", type: "media_list", functionName: "getCensored", cacheDuration: 600, params: [{ name: "page", label: "页码", type: "page" }] },
     { id: "uncensored", title: "无码", type: "media_list", functionName: "getUncensored", cacheDuration: 600, params: [{ name: "page", label: "页码", type: "page" }] },
@@ -229,6 +230,35 @@ function parseDetail(html) {
 }
 
 // ---- 数据源函数（模块） ----
+// 分类卡片（category 模块）：返回分类列表，点击后 params 透传给内容数据源
+async function getCategories(params) {
+  try {
+    _site = siteBase(params);
+    _cookie = (params && params.cookie) ? String(params.cookie).trim() : "";
+    _ua = (params && params.userAgent) ? String(params.userAgent).trim() : DEFAULT_UA;
+    return [
+      { id: "hot", name: "热门", params: { category: "hot", page: 1 } },
+      { id: "censored", name: "有码", params: { category: "censored", page: 1 } },
+      { id: "western", name: "欧美", params: { category: "western", page: 1 } },
+      { id: "fc2", name: "FC2", params: { category: "fc2", page: 1 } },
+      { id: "anime", name: "动漫", params: { category: "anime", page: 1 } }
+    ];
+  } catch (err) {
+    console.error("javdb categories failed", err.message);
+    throw err;
+  }
+}
+
+function pathForCategory(cat) {
+  if (cat === "hot") return "/";
+  if (cat === "censored") return "/censored";
+  if (cat === "western") return "/western";
+  if (cat === "fc2") return "/fc2";
+  if (cat === "anime") return "/anime";
+  if (cat === "uncensored") return "/uncensored";
+  return "/";
+}
+
 async function listModule(path, params, extra) {
   try {
     _site = siteBase(params);
@@ -236,6 +266,11 @@ async function listModule(path, params, extra) {
     _ua = (params && params.userAgent) ? String(params.userAgent).trim() : DEFAULT_UA;
     if (_cookie) Widget.storage.set("javdb_cookie", _cookie);
     if (_ua !== DEFAULT_UA) Widget.storage.set("javdb_ua", _ua);
+
+    // 分类卡片透传的 category 参数 -> 映射路径
+    if (params && params.category) {
+      path = pathForCategory(String(params.category));
+    }
 
     // API 模式：{site}/list?path=...&page=...
     var apiPath = path;
